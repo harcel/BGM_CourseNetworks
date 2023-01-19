@@ -7,48 +7,35 @@ import arviz as az
 
 # Marcel Haas, Nov 2022 (datascience@marcelhaas.com)
 
-   
-def plot_example_grades():
-    plt.figure(figsize=(12,5))
-    plt.subplot(121)
 
-    ability = 0
-    difficulty = np.linspace(-5,5, num=100)
-
-    min_grade = 0
-    max_grade = 100
+def grade(ability, difficulty, sens=1, noise=None, min_grade=0, max_grade=100, rounding=0):
+    """ Funstion to calculate grades.
     
-    c = grade(ability, difficulty, min_grade=min_grade, max_grade=max_grade)
-    plt.plot(difficulty, c, label="Ability = 0", linewidth=8)
-
-    ability = 3
-    c = grade(ability, difficulty, min_grade=min_grade, max_grade=max_grade)
-    plt.plot(difficulty, c, label="Ability = 3", linewidth=8)
-    plt.xlabel("Difficulty", fontsize=18)
-    plt.ylabel("Estimated grade", fontsize=18)
-    plt.legend(fontsize=14)
-    ########################################
-    plt.subplot(122)
-    difficulty = 0
-    ability = np.linspace(-5,5, num=100)
-
-    c = grade(ability, difficulty, min_grade=min_grade, max_grade=max_grade)
-    plt.plot(ability, c, label="Difficulty = 0", linewidth=8)
-
-    difficulty = 3
-    c = grade(ability, difficulty, min_grade=min_grade, max_grade=max_grade)
-    plt.plot(ability, c, label="Difficulty = 3", linewidth=8)
-    plt.xlabel("Ability", fontsize=18)
-    plt.ylabel("Estimated grade", fontsize=18)
-    plt.legend(fontsize=14);
-    return
-
-def grade(ability, difficulty, disc=1, noise=None, min_grade=6, max_grade=10, rounding=0):
+    Input
+    -----
+    ability: student abilities
+    difficulty: course difficulties
+    sens: sensitivity of grades to (ability-difficulty), 
+        default value: 1
+    noise: gaussian noise on grades with "noise" as stdev, 
+        default value: None
+    min_grade, max_grade: minimum (worst) and maximum (best) of grade scale, 
+        default value: 0, 10
+    rounding: rounding off grades to "rounding" decimals,
+        default value: 0 (i.e. integers)
+        
+    Returns: grades
+    
+    """
+    # If there is just one value for ability, use that, not average corrected
     if isinstance(ability, np.ndarray):
         mean_ab = ability.mean()
     else: mean_ab = 0
-    cijfer = (max_grade - min_grade) / (1+ np.exp(disc*(difficulty - (ability-mean_ab)))) + min_grade
+    
+    cijfer = (max_grade - min_grade) / (1+ np.exp(sens*(difficulty - (ability-mean_ab)))) + min_grade
+    
     if noise: cijfer += np.random.normal(0, noise, size=cijfer.shape)
+    
     return np.round(cijfer, rounding)
 
 
@@ -114,40 +101,87 @@ def grade_df(grades,
     
     return cijfertjes
 
-def model_and_visualize(grades_df):
+def model_and_visualize(grades_list, min_grade=0, max_grade=100):
     
     # Some data structures we need
-    courses = grades_df.Course.unique(); n_courses = len(courses)
+    courses = grades_list.Course.unique()
+    n_courses = len(courses)
     course_enum = {v:i for i, v in enumerate(courses)}
-    course_idx = np.array([course_enum[v] for v in grades_df.Course])
+    course_idx = np.array([course_enum[v] for v in grades_list.Course])
 
-    students = grades_df.StudentNumber.unique(); n_students = len(students)
+    students = grades_list.StudentNumber.unique()
+    n_students = len(students)
     student_enum = {s:i for i, s in enumerate(students)}
-    student_idx = np.array([student_enum[s] for s in grades_df.StudentNumber])
+    student_idx = np.array([student_enum[s] for s in grades_list.StudentNumber])
 
     # A pooled, hierarchical model for courses:
-    with pm.Model() as simulatie:
-        # Property of the courses
+    with pm.Model() as simulation:
+        # Properties of the courses: difficulty and predictability
         δ = pm.Normal('Course difficulty', 0, 3, shape=n_courses)
-        
+    #     σ = pm.Exponential('sigma', 1, shape=n_vakken) # Can do without in first go?
+        # Uncertainty in observed value determined per course.
+        # Or one overall uncertainty
+        ϵ = pm.HalfNormal('Grade scatter', 10)
+    #     ϵ = σ[vak_idx]
+    
+        # Include sensitivity in the model
+        s = pm.LogNormal('Course sensitivity', mu=0, sigma=.5, shape=n_courses)
+   
         # Properties of the students: ability
         α = pm.Normal('Student ability', 0, 3, shape=n_students)
-        
-        # Uncertainty in grade follows a Gaussian with stdev:
-        ϵ = pm.HalfNormal('eps', 10)
-        
+
         # Estimated grade from ability and difficulty
-        grade_estimate = 100 / (1+np.exp(δ[course_idx] - (α[student_idx]-α.mean() )))
-        # Likelihood is that gaussian
-        grades = pm.Normal("Grades", grade_estimate, sigma=ϵ, observed=grades_df.Grade)
+        grade_estimate = (max_grade - min_grade) / (1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))) + min_grade
+        grades = pm.TruncatedNormal("Grades", mu=grade_estimate, sigma=ϵ, lower=min_grade, upper=max_grade, observed=grades_list.Grade)
 
         # InferenceButton(TM)
         step = pm.NUTS()
-        trace = pm.sample(1000, cores=4, step=step, tune=2000)
+        trace = pm.sample(500, cores=4, step=step, tune=1000, return_inferencedata=True)
 
-    az.plot_trace(trace, var_names=['Course difficulty', 'eps'], figsize=(10,6));
+    az.plot_trace(trace, var_names=['Course difficulty', 'Course sensitivity', 'Grade scatter'], figsize=(10,10), combined=True);
     
-    return trace, simulatie
+    return trace, simulation
+ 
+def model_and_visualizeOU(grades_list, min_grade=0, max_grade=100):
+    
+    # Some data structures we need
+    courses = grades_list.Course.unique()
+    n_courses = len(courses)
+    course_enum = {v:i for i, v in enumerate(courses)}
+    course_idx = np.array([course_enum[v] for v in grades_list.Course])
+
+    students = grades_list.StudentNumber.unique()
+    n_students = len(students)
+    student_enum = {s:i for i, s in enumerate(students)}
+    student_idx = np.array([student_enum[s] for s in grades_list.StudentNumber])
+
+    # That wasn't pooled. Now, we'll pool
+    with pm.Model() as simulation:
+        # Properties of the courses: difficulty and predictability
+        δ = pm.Normal('Course difficulty', 0, 3, shape=n_courses)
+    #     σ = pm.Exponential('sigma', 1, shape=n_vakken) # Can do without in first go?
+        # Uncertainty in observed value determined per course.
+        # Or one overall uncertainty
+        scatter_parent = pm.HalfNormal('Scatter parent distribution', 1)
+        ϵ = pm.HalfNormal('Grade scatter', scatter_parent, shape=n_courses)
+    
+        # Include sensitivity in the model
+        s = pm.LogNormal('Course sensitivity', mu=0, sigma=.5, shape=n_courses)
+   
+        # Properties of the students: ability
+        α = pm.Normal('Student ability', 0, 3, shape=n_students)
+
+        # Estimated grade from ability and difficulty
+        grade_estimate = (max_grade - min_grade) / (1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))) + min_grade
+        grades = pm.TruncatedNormal("Grades", mu=grade_estimate, sigma=ϵ[course_idx], lower=min_grade, upper=max_grade, observed=grades_list.Grade)
+
+        # InferenceButton(TM)
+        step = pm.NUTS(target_accept=0.98)
+        trace = pm.sample(500, cores=4, step=step, tune=2500, return_inferencedata=True)
+
+    az.plot_trace(trace, var_names=['Course difficulty', 'Course sensitivity', 'Grade scatter'], figsize=(10,10), combined=True);
+    
+    return trace, simulation
     
 def course_network(df, 
                    course_list=None, 
@@ -244,7 +278,7 @@ def show_course_network(course_net, use_metadata=True, kind='spring'):
     edges_data = np.array([v[2]['nstudents'] for v in course_net.edges.data()] )
     min_no, max_no = edges_data.min(), edges_data.max()
     
-    fig, ax = plt.subplots(figsize=(20, 15))
+    fig, ax = plt.subplots(figsize=(10, 8))
     if kind == 'spring':
         pos = nx.spring_layout(course_net, k=0.7, seed=42) 
     elif kind == 'shell':
@@ -277,8 +311,8 @@ def show_course_network(course_net, use_metadata=True, kind='spring'):
             alpha=0.9
         )
         font = {"color": "r", "fontweight": "bold", "fontsize": 14}
-        plt.title(f"Node size correpsonds to number of students, color to average grade, edge thickness to overlap.", fontdict=font)
-        plt.xlabel(f"{nx.number_connected_components(course_net)} separate connected subgraphs", fontdict=font)
+        # plt.title(f"Node size correpsonds to number of students, color to average grade, edge thickness to overlap.", fontdict=font)
+        # plt.xlabel(f"{nx.number_connected_components(course_net)} separate connected subgraphs", fontdict=font)
         
     except Exception as inst:
         print(type(inst)) 

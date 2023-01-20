@@ -8,14 +8,14 @@ import arviz as az
 # Marcel Haas, Nov 2022 (datascience@marcelhaas.com)
 
 
-def grade(ability, difficulty, sens=1, noise=None, min_grade=0, max_grade=100, rounding=0):
+def grade(performance, difficulty, sens=1, noise=None, min_grade=0, max_grade=100, rounding=0):
     """ Funstion to calculate grades.
     
     Input
     -----
-    ability: student abilities
+    performance: student abilities
     difficulty: course difficulties
-    sens: sensitivity of grades to (ability-difficulty), 
+    sens: sensitivity of grades to (performance-difficulty), 
         default value: 1
     noise: gaussian noise on grades with "noise" as stdev, 
         default value: None
@@ -27,26 +27,26 @@ def grade(ability, difficulty, sens=1, noise=None, min_grade=0, max_grade=100, r
     Returns: grades
     
     """
-    # If there is just one value for ability, use that, not average corrected
-    if isinstance(ability, np.ndarray):
-        mean_ab = ability.mean()
-    else: mean_ab = 0
+    # If there is just one value for performance, use that, not average corrected
+    if isinstance(performance, np.ndarray):
+        mean_p = performance.mean()
+    else: mean_p = 0
     
-    cijfer = (max_grade - min_grade) / (1+ np.exp(sens*(difficulty - (ability-mean_ab)))) + min_grade
+    cijfer = (max_grade - min_grade) / (1+ np.exp(sens*(difficulty - (performance-mean_p)))) + min_grade
     
     if noise: cijfer += np.random.normal(0, noise, size=cijfer.shape)
     
     return np.round(cijfer, rounding)
 
 
-def create_data(difficulties=None, ability_diff=3., ability_std=0.1, n_st=500,
+def create_data(difficulties=None, performance_diff=3., performance_std=0.1, n_st=500,
                noise_cijfers=0.01):
     """ Simple function to set difficulties and abilities for experiment.
     If none are given, the setup of the first simple experiment is used. 
     Other possibilities:
     difficulties: list/array of difficulties
-    ability_diff: int/float that indicates the difference in mean ability between the groups
-    ability_std: float: standard deviation of normally distributed ability with the groups 
+    performance_diff: int/float that indicates the difference in mean performance between the groups
+    performance_std: float: standard deviation of normally distributed performance with the groups 
                         (same for both groups)
     n_st: int: number of students in each group
     noise_cijfers: float: (gaussian) noise on grades
@@ -67,10 +67,10 @@ def create_data(difficulties=None, ability_diff=3., ability_std=0.1, n_st=500,
 
     n_st = 500
 
-    ability_dom = 0.
+    performance_dom = 0.
     
-    abilities_dom = np.random.normal(loc=ability_dom, scale=ability_std, size=n_st)
-    abilities_slim = np.random.normal(loc=ability_dom+ability_diff, scale=ability_std, size=n_st)
+    abilities_dom = np.random.normal(loc=performance_dom, scale=performance_std, size=n_st)
+    abilities_slim = np.random.normal(loc=performance_dom+performance_diff, scale=performance_std, size=n_st)
     abilities = np.concatenate((abilities_dom, abilities_slim)).reshape(-1, 1)
 
     grades = grade(abilities, difficulties, noise=noise_cijfers)
@@ -127,10 +127,10 @@ def model_and_visualize(grades_list, min_grade=0, max_grade=100):
         # Include sensitivity in the model
         s = pm.LogNormal('Course sensitivity', mu=0, sigma=.5, shape=n_courses)
    
-        # Properties of the students: ability
-        α = pm.Normal('Student ability', 0, 3, shape=n_students)
+        # Properties of the students: performance
+        α = pm.Normal('Student performance', 0, 3, shape=n_students)
 
-        # Estimated grade from ability and difficulty
+        # Estimated grade from performance and difficulty
         grade_estimate = (max_grade - min_grade) / (1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))) + min_grade
         grades = pm.TruncatedNormal("Grades", mu=grade_estimate, sigma=ϵ, lower=min_grade, upper=max_grade, observed=grades_list.Grade)
 
@@ -168,16 +168,16 @@ def model_and_visualizeOU(grades_list, min_grade=0, max_grade=100):
         # Include sensitivity in the model
         s = pm.LogNormal('Course sensitivity', mu=0, sigma=.5, shape=n_courses)
    
-        # Properties of the students: ability
-        α = pm.Normal('Student ability', 0, 3, shape=n_students)
+        # Properties of the students: performance
+        α = pm.Normal('Student performance', 0, 3, shape=n_students)
 
-        # Estimated grade from ability and difficulty
+        # Estimated grade from performance and difficulty
         grade_estimate = (max_grade - min_grade) / (1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))) + min_grade
         grades = pm.TruncatedNormal("Grades", mu=grade_estimate, sigma=ϵ[course_idx], lower=min_grade, upper=max_grade, observed=grades_list.Grade)
 
         # InferenceButton(TM)
-        step = pm.NUTS(target_accept=0.98)
-        trace = pm.sample(500, cores=4, step=step, tune=2500, return_inferencedata=True)
+        step = pm.NUTS(target_accept=0.98) # target_accept=0.98
+        trace = pm.sample(500, cores=4, step=step, tune=1000, return_inferencedata=True)
 
     az.plot_trace(trace, var_names=['Course difficulty', 'Course sensitivity', 'Grade scatter'], figsize=(10,10), combined=True);
     

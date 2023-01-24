@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import pymc as pm
 import arviz as az
 
-# Marcel Haas, Nov 2022 (datascience@marcelhaas.com)
+# Marcel Haas, Jan 2023 (datascience@marcelhaas.com)
 
 
 def grade(performance, difficulty, sens=1, noise=None, min_grade=0, max_grade=100, rounding=0):
@@ -40,7 +40,7 @@ def grade(performance, difficulty, sens=1, noise=None, min_grade=0, max_grade=10
 
 
 def create_data(difficulties=None, performance_diff=3., performance_std=0.1, n_st=500,
-               noise_cijfers=0.01):
+               noise_grades=0.01):
     """ Simple function to set difficulties and abilities for experiment.
     If none are given, the setup of the first simple experiment is used. 
     Other possibilities:
@@ -73,7 +73,7 @@ def create_data(difficulties=None, performance_diff=3., performance_std=0.1, n_s
     abilities_slim = np.random.normal(loc=performance_dom+performance_diff, scale=performance_std, size=n_st)
     abilities = np.concatenate((abilities_dom, abilities_slim)).reshape(-1, 1)
 
-    grades = grade(abilities, difficulties, noise=noise_cijfers)
+    grades = grade(abilities, difficulties, noise=noise_grades)
     
     # Set to NaN for those who didn't do some courses:
     grades[n_st:,:3] = np.nan
@@ -91,18 +91,26 @@ def grade_df(grades,
     Apologies for the Dutch variable names :)
     """
     # To df
-    alle_cijfers = pd.DataFrame(data=grades, columns=course_names).reset_index()
+    all_grades = pd.DataFrame(data=grades, columns=course_names).reset_index()
     # To long form
-    cijfertjes = pd.melt(alle_cijfers, id_vars=['index']).dropna()
+    grades = pd.melt(all_grades, id_vars=['index']).dropna()
     # Names that mean something
-    cijfertjes.rename(
+    grades.rename(
         columns={'index':'StudentNumber', 'variable':'Course', 'value':'Grade'}, 
         inplace=True)
     
-    return cijfertjes
+    return grades
 
 def model_and_visualize(grades_list, min_grade=0, max_grade=100):
+    """ Routine to prepare and run the MCMC simulation, in the
+    default set-up.
     
+    grades_list: a pd.DataFrame with columns Course, 
+                StudentNumber and Grade
+    min/max_grade: the minimum and maximum grade of the scale.
+    ------
+    
+    """
     # Some data structures we need
     courses = grades_list.Course.unique()
     n_courses = len(courses)
@@ -118,11 +126,8 @@ def model_and_visualize(grades_list, min_grade=0, max_grade=100):
     with pm.Model() as simulation:
         # Properties of the courses: difficulty and predictability
         δ = pm.Normal('Course difficulty', 0, 3, shape=n_courses)
-    #     σ = pm.Exponential('sigma', 1, shape=n_vakken) # Can do without in first go?
-        # Uncertainty in observed value determined per course.
-        # Or one overall uncertainty
+        # Uncertainty in observed value determined overall.
         ϵ = pm.HalfNormal('Grade scatter', 10)
-    #     ϵ = σ[vak_idx]
     
         # Include sensitivity in the model
         s = pm.LogNormal('Course sensitivity', mu=0, sigma=.5, shape=n_courses)
@@ -131,18 +136,32 @@ def model_and_visualize(grades_list, min_grade=0, max_grade=100):
         α = pm.Normal('Student performance', 0, 3, shape=n_students)
 
         # Estimated grade from performance and difficulty
-        grade_estimate = (max_grade - min_grade) / (1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))) + min_grade
-        grades = pm.TruncatedNormal("Grades", mu=grade_estimate, sigma=ϵ, lower=min_grade, upper=max_grade, observed=grades_list.Grade)
+        grade_estimate = (max_grade - min_grade) / (
+            1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))
+            ) + min_grade
+        grades = pm.TruncatedNormal("Grades", 
+                                    mu=grade_estimate, 
+                                    sigma=ϵ, 
+                                    lower=min_grade, 
+                                    upper=max_grade, 
+                                    observed=grades_list.Grade)
 
         # InferenceButton(TM)
         step = pm.NUTS()
-        trace = pm.sample(500, cores=4, step=step, tune=1000, return_inferencedata=True)
+        trace = pm.sample(2000, cores=4, step=step, tune=1000, return_inferencedata=True)
 
-    az.plot_trace(trace, var_names=['Course difficulty', 'Course sensitivity', 'Grade scatter'], figsize=(10,10), combined=True);
+    az.plot_trace(trace, 
+                  var_names=['Course difficulty', 'Course sensitivity', 'Grade scatter'], 
+                  figsize=(10,10), 
+                  combined=True);
     
     return trace, simulation
  
 def model_and_visualizeOU(grades_list, min_grade=0, max_grade=100):
+    """ Slight adaptation to the function above to incoroporate different
+    scatter on the grades for different courses.    
+    """
+    
     
     # Some data structures we need
     courses = grades_list.Course.unique()
@@ -159,9 +178,7 @@ def model_and_visualizeOU(grades_list, min_grade=0, max_grade=100):
     with pm.Model() as simulation:
         # Properties of the courses: difficulty and predictability
         δ = pm.Normal('Course difficulty', 0, 3, shape=n_courses)
-    #     σ = pm.Exponential('sigma', 1, shape=n_vakken) # Can do without in first go?
         # Uncertainty in observed value determined per course.
-        # Or one overall uncertainty
         scatter_parent = pm.HalfNormal('Scatter parent distribution', 1)
         ϵ = pm.HalfNormal('Grade scatter', scatter_parent, shape=n_courses)
     
@@ -172,14 +189,24 @@ def model_and_visualizeOU(grades_list, min_grade=0, max_grade=100):
         α = pm.Normal('Student performance', 0, 3, shape=n_students)
 
         # Estimated grade from performance and difficulty
-        grade_estimate = (max_grade - min_grade) / (1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))) + min_grade
-        grades = pm.TruncatedNormal("Grades", mu=grade_estimate, sigma=ϵ[course_idx], lower=min_grade, upper=max_grade, observed=grades_list.Grade)
+        grade_estimate = (max_grade - min_grade) / (
+            1+np.exp(s[course_idx]*(δ[course_idx] - (α[student_idx]-α.mean() )))
+            ) + min_grade
+        grades = pm.TruncatedNormal("Grades", 
+                                    mu=grade_estimate, 
+                                    sigma=ϵ[course_idx], 
+                                    lower=min_grade, 
+                                    upper=max_grade, 
+                                    observed=grades_list.Grade)
 
         # InferenceButton(TM)
         step = pm.NUTS(target_accept=0.98) # target_accept=0.98
         trace = pm.sample(500, cores=4, step=step, tune=1000, return_inferencedata=True)
 
-    az.plot_trace(trace, var_names=['Course difficulty', 'Course sensitivity', 'Grade scatter'], figsize=(10,10), combined=True);
+    az.plot_trace(trace, 
+                  var_names=['Course difficulty', 'Course sensitivity', 'Grade scatter'], 
+                  figsize=(10,10), 
+                  combined=True);
     
     return trace, simulation
     
@@ -222,8 +249,8 @@ def course_network(df,
     G = nx.from_pandas_edgelist(df, 'StudentNumber', 'Course')
     
     # Just for safety:
-    Cijfer = 'Grade' in df
-    if not Cijfer: 
+    grade_present = 'Grade' in df
+    if not grade_present: 
         print('No Grade in DataFrame, no Grade information in output')
     
     # Compile course metadata
@@ -231,7 +258,7 @@ def course_network(df,
     n_students = percourse.StudentNumber.nunique()
     nst = pd.DataFrame(n_students).rename(
         columns={'StudentNumber':'Number'})
-    if Cijfer: av_grades = percourse.Grade.mean()
+    if grade_present: av_grades = percourse.Grade.mean()
     df = df.merge(nst, how='inner', left_on="Course", right_index=True)
     df = df[df.Number >= min_students_course]
     
@@ -257,7 +284,7 @@ def course_network(df,
         
         # add course metadata to network
         course_net.nodes[c]['nstudents'] = ns_course
-        if Cijfer: course_net.nodes[c]['avgrade'] = av_grades[c]
+        if grade_present: course_net.nodes[c]['avgrade'] = av_grades[c]
         
     # Remove unconnected nodes
     course_net.remove_nodes_from(list(nx.isolates(course_net)))

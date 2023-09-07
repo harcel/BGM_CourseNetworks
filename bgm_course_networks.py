@@ -326,10 +326,14 @@ def show_course_network(course_net, use_metadata=True, kind='spring'):
         node_size = [(v[1]['nstudents']-min_ns+1)*5000/(max_ns - min_ns) for v in course_net.nodes.data()]
         node_color = [v[1]['avgrade'] for v in course_net.nodes.data()]
         widths = [3*(v[2]['nstudents']-min_no)/(max_no - min_no)+.1 for v in course_net.edges.data()]
-        nx.draw_networkx(
+
+        pos = nx.spring_layout(course_net)
+        pos_nodes = nudge(pos, 0, 0.1)                              # shift the layout
+
+        plotje = nx.draw_networkx(
             course_net,
             pos=pos,
-            with_labels=True,
+            with_labels=False,
             node_color=node_color,
             node_size=node_size,
             edge_color="black",
@@ -337,6 +341,7 @@ def show_course_network(course_net, use_metadata=True, kind='spring'):
             cmap='viridis',
             alpha=0.9
         )
+        plotje.draw_networkx_labels(course_net, pos=pos_nodes)
         font = {"color": "r", "fontweight": "bold", "fontsize": 14}
         # plt.title(f"Node size correpsonds to number of students, color to average grade, edge thickness to overlap.", fontdict=font)
         # plt.xlabel(f"{nx.number_connected_components(course_net)} separate connected subgraphs", fontdict=font)
